@@ -60,7 +60,7 @@ async def main():
             rawhit_coroutines.append(api_call.get_rawhit(hit_id))
     raw_hits = await asyncio.gather(*rawhit_coroutines)
 
-    # elastic = SenderData(address='http://localhost:9200', http_auth='admin:password')
+    # elastic = SenderData(address='http://localhost:9200', http_auth='admin:password', collector_type='es')
     # [await elastic.send_to_elastic(body=rawhit, index='wallarm') for rawhit in raw_hits]
 
     # In case of Sumologic HTTP collector

@@ -1,0 +1,6 @@
+*.json
+*.swp
+venv
+.idea
+.DS_Store
+README.md
