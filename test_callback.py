@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 
 import asyncio
+import nest_asyncio
 import os
 from wallarm_api.exceptions import EnvVariableNotSet
 from wallarm_api.wlrm import WallarmAPI, SenderData
+
+# Global variable to access from function create_collector_object()
+COLLECTOR_ADDRESS = ''
 
 
 def get_env():
@@ -16,15 +20,34 @@ def get_env():
     return UUID, SECRET, API, COLLECTOR_ADDRESS
 
 
+def attack_callback(future):
+    for attack_body in future.result()['body']:
+        loggly = create_collector_object()
+        asyncio.run(loggly.send_to_collector(attack_body))
+
+
+def raw_hit_callback(future):
+    loggly = create_collector_object()
+    asyncio.run(loggly.send_to_collector(future.result()))
+
+
+def create_collector_object():
+    collector = SenderData(address=COLLECTOR_ADDRESS)
+    return collector
+
+
 async def main():
-    UUID, SECRET, API, COLLECTOR_ADDRESS = get_env()
+    UUID, SECRET, API, ADDRESS = get_env()
+    global COLLECTOR_ADDRESS
+    COLLECTOR_ADDRESS = ADDRESS
 
     poolid = int(os.environ.get("POOLID", 9))  # 9 - pool:"Demo Tiredful-API"
     api_call = WallarmAPI(uuid=UUID, secret=SECRET, api=API)
     search = await api_call.get_search(query='last hour')
     search_time = search['body']['attacks']['time']
-    counter = asyncio.create_task(api_call.get_attack_count(search_time, poolid=[poolid]))
-    attacks = asyncio.create_task(api_call.get_attack(search_time, poolid=[poolid]))
+    counter = asyncio.create_task(api_call.get_attack_count(search_time))
+    attacks = asyncio.create_task(api_call.get_attack(search_time))
+    attacks.add_done_callback(attack_callback)
 
     tasks = [counter, attacks]
     count_struct, attack_struct = await asyncio.gather(*tasks)
@@ -37,10 +60,9 @@ async def main():
     offset = 1000
     while attacks_count > number_of_attacks:
         if attacks_count > number_of_attacks:
-            attacks = asyncio.create_task(api_call.get_attack(search_time, poolid=[poolid], offset=offset))
-            results = await attacks
-            for attack_body in results['body']:
-                attack_ids.append(attack_body['attackid'])
+            attacks = asyncio.create_task(api_call.get_attack(search_time, offset=offset))
+            attacks.add_done_callback(attack_callback)
+            await attacks
             number_of_attacks += 1000
             offset += 1000
         else:
@@ -56,12 +78,12 @@ async def main():
         for hit_body_id in hit_body["body"]:
             hit_id = f'{hit_body_id["id"][0]}:{hit_body_id["id"][1]}'
             raw_h = asyncio.create_task(api_call.get_rawhit(hit_id))
+            raw_h.add_done_callback(raw_hit_callback)
             rawhit_coroutines.append(raw_h)
-    raw_hits = await asyncio.gather(*rawhit_coroutines)
-
-    loggly = SenderData(address=COLLECTOR_ADDRESS)
-    [await loggly.send_to_collector(rawhit) for rawhit in raw_hits]
+    await asyncio.gather(*rawhit_coroutines)
 
 
 if __name__ == '__main__':
+    # Patch asyncio to allow nested event loops
+    nest_asyncio.apply()
     asyncio.run(main())
